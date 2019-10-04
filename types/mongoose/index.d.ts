@@ -31,6 +31,7 @@
 //                 Simon Driscoll <https://github.com/dinodeSimon>
 //                 Anton Kenikh <https://github.com/anthony-kenikh>
 //                 Chathu Vishwajith <https://github.com/iamchathu>
+//                 Captain Caius <https://github.com/captaincaius>
 // Definitions: https://github.com/DefinitelyTyped/DefinitelyTyped
 // TypeScript Version: 2.8
 
@@ -64,6 +65,54 @@ To find a section, CTRL+F and type "section ___.js"
  * section filename.js
  * http://mongoosejs.com/docs/api.html#filename-js
  */
+
+type Constructor<T = any> = new (...args: any) => T
+
+// is in longhand form already (has the type field)
+interface Longhand<T = any> {
+  type: T;
+}
+
+// ensure it's shaped in the longhand canonical form (using type property)
+type Longhandified<T> = T extends Longhand ? T : Longhand<T>;
+
+// reverse of longhandifying (because we ALWAYS want to set the type on the PARENT of whatever has "type")
+type FlattenedProperty<TExpanded extends Longhand<any>> = TExpanded["type"];
+
+// to support custom SchemaTypes - NOTE: We'll need to make this field illegal in SchemaTypes!
+interface HasTypescriptType {
+  typescriptType: any;
+}
+
+type MapSchemaTypeToTSInstanceType<TOuter extends Longhand> =
+  // builtin: string
+  TOuter["type"] extends Constructor<String> ? {
+    type: string;
+  } :
+  // builtin: number
+  TOuter["type"] extends Constructor<Number> ? {
+    type: number;
+  } :
+  // @todo: add Dates and other builtin types
+  // arrays
+  TOuter["type"] extends Array<any> ? {
+    type: Array<FlattenedProperty<MapSchemaTypeToTSInstanceType<Longhandified<TOuter["type"][0]>>>>;
+  } :
+  // custom SchemaTypes
+  TOuter["type"] extends Constructor<HasTypescriptType> ? {
+    type: InstanceType<TOuter["type"]>["typescriptType"];
+  } :
+  // @todo: Schema
+  // @todo: Mixed->any
+  // objects
+  TOuter["type"] extends Object ? {
+    type: MapSchemaToType<FlattenedProperty<Longhandified<TOuter["type"]>>>;
+  } :
+  { type: never };
+
+type MapSchemaToType<TDef> = {
+  [key in keyof TDef]: FlattenedProperty<MapSchemaTypeToTSInstanceType<Longhandified<TDef[key]>>>;
+};
 
 declare module "mongoose" {
   import events = require('events');
@@ -153,14 +202,14 @@ declare module "mongoose" {
    * @param collection (optional, induced from model name)
    * @param skipInit whether to skip initialization (defaults to false)
    */
-  export function model<T extends Document>(name: string, schema?: Schema, collection?: string,
-    skipInit?: boolean): Model<T>;
-  export function model<T extends Document, U extends Model<T>>(
+  export function model<TSchema extends SchemaDefinition, T = {}>(name: string, schema?: Schema<TSchema>, collection?: string,
+    skipInit?: boolean): Model<T & Document<TSchema> & MapSchemaToType<TSchema>, {}, TSchema>;
+  export function model<TSchema extends SchemaDefinition, T = {}>(
     name: string,
-    schema?: Schema,
+    schema?: Schema<TSchema>,
     collection?: string,
     skipInit?: boolean
-  ): U;
+  ): Model<T & Document<TSchema> & MapSchemaToType<TSchema>, {}, TSchema>;
 
   /**
    * Returns an array of model names created on this instance of Mongoose.
@@ -266,12 +315,12 @@ declare module "mongoose" {
      * @param collection name of mongodb collection (optional) if not given it will be induced from model name
      * @returns The compiled model
      */
-    model<T extends Document>(name: string, schema?: Schema, collection?: string): Model<T>;
-    model<T extends Document, U extends Model<T>>(
+    model<TSchema extends SchemaDefinition, T = {}>(name: string, schema?: Schema<TSchema>, collection?: string): Model<T & Document<TSchema> & MapSchemaToType<TSchema>, {}, TSchema>;
+    model<T extends Document<TSchema>, U extends Model<T>, TSchema extends SchemaDefinition>(
       name: string,
-      schema?: Schema,
+      schema?: Schema<TSchema>,
       collection?: string
-    ): U;
+    ): Model<T & Document<TSchema> & MapSchemaToType<TSchema>, {}, TSchema>;
 
     /**
      * Removes the model named `name` from this connection, if it exists. You can
@@ -508,7 +557,7 @@ declare module "mongoose" {
 
       errors: {[path: string]: ValidatorError | CastError};
 
-      constructor(instance?: MongooseDocument);
+      constructor(instance?: MongooseDocument<any>);
 
       /** Console.log helper */
       toString(): string;
@@ -554,7 +603,7 @@ declare module "mongoose" {
       version: any;
       modifiedPaths: Array<any>;
 
-      constructor(doc: MongooseDocument, currentVersion: any, modifiedPaths: any);
+      constructor(doc: MongooseDocument<any>, currentVersion: any, modifiedPaths: any);
     }
 
     /**
@@ -567,7 +616,7 @@ declare module "mongoose" {
      */
     export class ParallelSaveError extends Error {
       name: 'ParallelSaveError';
-      constructor(doc: MongooseDocument);
+      constructor(doc: MongooseDocument<any>);
     }
 
     /**
@@ -619,7 +668,7 @@ declare module "mongoose" {
    * QueryCursor can only be accessed by query#cursor(), we only
    *   expose its interface to enable type-checking.
    */
-  interface QueryCursor<T extends Document> extends stream.Readable {
+  interface QueryCursor<T extends Document<any>> extends stream.Readable {
     /**
      * A QueryCursor is a concurrency primitive for processing query results
      * one document at a time. A QueryCursor fulfills the Node.js streams3 API,
@@ -691,20 +740,20 @@ declare module "mongoose" {
    * section schema.js
    * http://mongoosejs.com/docs/api.html#schema-js
    */
-  class Schema<T = any> extends events.EventEmitter {
+  class Schema<TSchD extends SchemaDefinition, T = any> extends events.EventEmitter {
     /**
      * Schema constructor.
      * When nesting schemas, (children in the example above), always declare
      * the child schema first before passing it into its parent.
      * @event init Emitted after the schema is compiled into a Model.
      */
-    constructor(definition?: SchemaDefinition, options?: SchemaOptions);
+    constructor(definition?: TSchD, options?: SchemaOptions);
 
     /** Adds key path / schema type pairs to this schema. */
     add(obj: SchemaDefinition, prefix?: string): void;
 
     /** Return a deep copy of this schema */
-    clone(): Schema;
+    clone(): Schema<TSchD>;
 
     /**
      * Iterates the schemas paths similar to Array.forEach.
@@ -766,8 +815,8 @@ declare module "mongoose" {
      * Registers a plugin for this schema.
      * @param plugin callback
      */
-    plugin(plugin: (schema: Schema) => void): this;
-    plugin<T>(plugin: (schema: Schema, options: T) => void, opts: T): this;
+    plugin(plugin: (schema: Schema<TSchD>) => void): this;
+    plugin<T>(plugin: (schema: Schema<TSchD>, options: T) => void, opts: T): this;
 
     /**
      * Defines a post hook for the document
@@ -776,18 +825,18 @@ declare module "mongoose" {
      * @param method name of the method to hook
      * @param fn callback
      */
-    post<T extends Document>(method: string | RegExp, fn: (
+    post<T extends Document<TSchD>>(method: string | RegExp, fn: (
       doc: T, next: (err?: NativeError) => void
     ) => void): this;
 
-    post<T extends Document>(method: string | RegExp, fn: (
+    post<T extends Document<TSchD>>(method: string | RegExp, fn: (
       error: mongodb.MongoError, doc: T, next: (err?: NativeError) => void
     ) => void): this;
 
     /**
      * Defines a pre hook for the document.
      */
-    pre<T extends Document = Document>(
+    pre<T extends Document<TSchD> = Document<TSchD>>(
       method: "init" | "validate" | "save" | "remove",
       fn: HookSyncCallback<T>,
       errorCb?: HookErrorCallback
@@ -810,18 +859,18 @@ declare module "mongoose" {
       fn: HookSyncCallback<T>,
       errorCb?: HookErrorCallback
     ): this;
-    pre<T extends Model<Document> = Model<Document>>(
+    pre<T extends Model<Document<TSchD>> = Model<Document<TSchD>>>(
       method: "insertMany",
       fn: HookSyncCallback<T>,
       errorCb?: HookErrorCallback
     ): this;
-    pre<T extends Document | Model<Document> | Query<any> | Aggregate<any>>(
+    pre<T extends Document<TSchD> | Model<Document<TSchD>> | Query<any> | Aggregate<any>>(
       method: string,
       fn: HookSyncCallback<T>,
       errorCb?: HookErrorCallback
     ): this;
 
-    pre<T extends Document = Document>(
+    pre<T extends Document<TSchD> = Document<TSchD>>(
       method: "init" | "validate" | "save" | "remove",
       parallel: boolean,
       fn: HookAsyncCallback<T>,
@@ -847,13 +896,13 @@ declare module "mongoose" {
       fn: HookAsyncCallback<T>,
       errorCb?: HookErrorCallback
     ): this;
-    pre<T extends Model<Document> = Model<Document>>(
+    pre<T extends Model<Document<TSchD>> = Model<Document<TSchD>>>(
       method: "insertMany",
       parallel: boolean,
       fn: HookAsyncCallback<T>,
       errorCb?: HookErrorCallback
     ): this;
-    pre<T extends Document | Model<Document> | Query<any> | Aggregate<any>>(
+    pre<T extends Document<TSchD> | Model<Document<TSchD>> | Query<any> | Aggregate<any>>(
       method: string | RegExp,
       parallel: boolean,
       fn: HookAsyncCallback<T>,
@@ -918,7 +967,7 @@ declare module "mongoose" {
     /** Object of currently defined query helpers on this schema. */
     query: any;
     /** The original object passed to the schema constructor */
-    obj: any;
+    obj: MapSchemaToType<TSchD>;
   }
 
   // Hook functions: https://github.com/vkarpov15/hooks-fixed
@@ -1023,7 +1072,7 @@ declare module "mongoose" {
    * Intellisense for Schema definitions
    */
   interface SchemaDefinition {
-    [path: string]: SchemaTypeOpts<any> | Schema | SchemaType;
+    [path: string]: SchemaTypeOpts<any> | Schema<any> | SchemaType;
   }
 
   /*
@@ -1222,8 +1271,8 @@ declare module "mongoose" {
    * section document.js
    * http://mongoosejs.com/docs/api.html#document-js
    */
-  interface MongooseDocument extends MongooseDocumentOptionals { }
-  class MongooseDocument {
+  interface MongooseDocument<TSchD extends SchemaDefinition> extends MongooseDocumentOptionals { }
+  class MongooseDocument<TSchD extends SchemaDefinition> {
     /** Checks if a path is set to its default. */
     $isDefault(path?: string): boolean;
 
@@ -1242,7 +1291,7 @@ declare module "mongoose" {
      * has an _id, in which case this function falls back to usin deepEqual().
      * @param doc a document to compare
      */
-    equals(doc: MongooseDocument): boolean;
+    equals(doc: MongooseDocument<any>): boolean;
 
     /**
      * Explicitly executes population and returns a promise.
@@ -1266,7 +1315,7 @@ declare module "mongoose" {
      * @param doc document returned by mongo
      * @param opts Options
      */
-    init(doc: MongooseDocument, opts?: any): this;
+    init(doc: MongooseDocument<TSchD>, opts?: any): this;
 
     /** Helper for console.log */
     inspect(options?: any): any;
@@ -1404,7 +1453,7 @@ declare module "mongoose" {
     /** Boolean flag specifying if the document is new. */
     isNew: boolean;
     /** The documents schema. */
-    schema: Schema;
+    schema: Schema<TSchD>;
   }
 
   interface MongooseDocumentOptionals {
@@ -1444,9 +1493,9 @@ declare module "mongoose" {
       * section types/subdocument.js
       * http://mongoosejs.com/docs/api.html#types-subdocument-js
       */
-    class Subdocument extends MongooseDocument {
+    class Subdocument extends MongooseDocument<any> {
       /** Returns the top level document of this sub-document. */
-      ownerDocument(): MongooseDocument;
+      ownerDocument(): MongooseDocument<any>;
 
       /**
        * Null-out this subdoc
@@ -1569,7 +1618,7 @@ declare module "mongoose" {
       * section types/documentarray.js
       * http://mongoosejs.com/docs/api.html#types-documentarray-js
       */
-    class DocumentArray<T extends MongooseDocument> extends Types.Array<T> {
+    class DocumentArray<T extends MongooseDocument<any>> extends Types.Array<T> {
       /**
        * Creates a subdocument casted to this schema.
        * This is the same subdocument constructor used for casting.
@@ -1644,7 +1693,7 @@ declare module "mongoose" {
       * section types/embedded.js
       * http://mongoosejs.com/docs/api.html#types-embedded-js
       */
-    class Embedded extends MongooseDocument {
+    class Embedded extends MongooseDocument<any> {
       /** Helper for console.log */
       inspect(): any;
 
@@ -1656,11 +1705,11 @@ declare module "mongoose" {
       invalidate(path: string, err: string | NativeError): boolean;
 
       /** Returns the top level document of this sub-document. */
-      ownerDocument(): MongooseDocument;
+      ownerDocument(): MongooseDocument<any>;
       /** Returns this sub-documents parent document. */
-      parent(): MongooseDocument;
+      parent(): MongooseDocument<any>;
       /** Returns this sub-documents parent array. */
-      parentArray(): DocumentArray<MongooseDocument>;
+      parentArray(): DocumentArray<MongooseDocument<any>>;
 
       /** Removes the subdocument from its parent array. */
       remove(options?: {
@@ -1703,7 +1752,7 @@ declare module "mongoose" {
    * for instance findOneAndUpdate.
    */
   class Query<T> extends DocumentQuery<T, any> { }
-  class DocumentQuery<T, DocType extends Document, QueryHelpers = {}> extends mquery {
+  class DocumentQuery<T, DocType extends Document<any>, QueryHelpers = {}> extends mquery {
     /**
      * Specifies a javascript function or expression to pass to MongoDBs query system.
      * Only use $where when you have a condition that cannot be met using other MongoDB
@@ -2205,7 +2254,7 @@ declare module "mongoose" {
      * constructor with all arguments and options retained.
      */
     toConstructor<T>(): new (...args: any[]) => Query<T> & QueryHelpers;
-    toConstructor<T, Doc extends Document>(): new (...args: any[]) => DocumentQuery<T, Doc> & QueryHelpers;
+    toConstructor<T, Doc extends Document<any>>(): new (...args: any[]) => DocumentQuery<T, Doc> & QueryHelpers;
 
     /**
      * Declare and/or execute this query as an update() operation.
@@ -2332,7 +2381,7 @@ declare module "mongoose" {
         constructor(key: string, options?: any);
 
         /** Check if the given value satisfies a required validator. */
-        checkRequired(value: any, doc: MongooseDocument): boolean;
+        checkRequired(value: any, doc: MongooseDocument<any>): boolean;
 
         /**
          * Adds an enum validator
@@ -2380,7 +2429,7 @@ declare module "mongoose" {
         */
       class DocumentArray extends Array {
         /** SubdocsArray SchemaType constructor */
-        constructor(key: string, schema: Schema, options?: any);
+        constructor(key: string, schema: Schema<any>, options?: any);
 
         /** This schema type's name, to defend against minifiers that mangle function names. */
         static schemaName: string;
@@ -2390,14 +2439,14 @@ declare module "mongoose" {
          * @param name discriminator model name
          * @param schema discriminator model schema
          */
-        discriminator<U extends Document>(name: string, schema: Schema): Model<U>;
+        discriminator<U extends Document<any>>(name: string, schema: Schema<any>): Model<U>;
 
         /**
          * Adds a discriminator type.
          * @param name discriminator model name
          * @param schema discriminator model schema
          */
-        discriminator<U extends Document, M extends Model<U>>(name: string, schema: Schema): M;
+        discriminator<U extends Document<any>, M extends Model<U>>(name: string, schema: Schema<any>): M;
 
       }
 
@@ -2410,7 +2459,7 @@ declare module "mongoose" {
         constructor(key: string, options?: any);
 
         /** Check if the given value satisfies a required validator. */
-        checkRequired(value: any, doc: MongooseDocument): boolean;
+        checkRequired(value: any, doc: MongooseDocument<any>): boolean;
 
         /**
          * Sets a maximum number validator.
@@ -2442,7 +2491,7 @@ declare module "mongoose" {
          * Check if the given value satisfies a required validator. To satisfy
          * a required validator, the given value must be an instance of Date.
          */
-        checkRequired(value: any, doc: MongooseDocument): boolean;
+        checkRequired(value: any, doc: MongooseDocument<any>): boolean;
 
         /** Declares a TTL index (rounded to the nearest second) for Date types only. */
         expires(when: number | string): this;
@@ -2478,7 +2527,7 @@ declare module "mongoose" {
          * required validator, a buffer must not be null or undefined and have
          * non-zero length.
          */
-        checkRequired(value: any, doc: MongooseDocument): boolean;
+        checkRequired(value: any, doc: MongooseDocument<any>): boolean;
 
         /** This schema type's name, to defend against minifiers that mangle function names. */
         static schemaName: string;
@@ -2519,7 +2568,7 @@ declare module "mongoose" {
         auto(turnOn: boolean): this;
 
         /** Check if the given value satisfies a required validator. */
-        checkRequired(value: any, doc: MongooseDocument): boolean;
+        checkRequired(value: any, doc: MongooseDocument<any>): boolean;
 
         /** This schema type's name, to defend against minifiers that mangle function names. */
         static schemaName: string;
@@ -2533,7 +2582,7 @@ declare module "mongoose" {
         constructor(key: string, options?: any);
 
         /** Check if the given value satisfies a required validator. */
-        checkRequired(value: any, doc: MongooseDocument): boolean;
+        checkRequired(value: any, doc: MongooseDocument<any>): boolean;
 
         /** This schema type's name, to defend against minifiers that mangle function names. */
         static schemaName: string;
@@ -2557,7 +2606,7 @@ declare module "mongoose" {
         */
       class Embedded extends SchemaType {
         /** Sub-schema schematype constructor */
-        constructor(schema: Schema, key: string, options?: any);
+        constructor(schema: Schema<any>, key: string, options?: any);
       }
 
       /**
@@ -2844,7 +2893,7 @@ declare module "mongoose" {
    * http://mongoosejs.com/docs/api.html#model-js
    */
   export var Model: Model<any>;
-  interface Model<T extends Document, QueryHelpers = {}> extends NodeJS.EventEmitter, ModelProperties {
+  interface Model<T extends Document<TSchD>, QueryHelpers = {}, TSchD extends SchemaDefinition = {}> extends NodeJS.EventEmitter, ModelProperties<TSchD> {
     /**
      * Model constructor
      * Provides the interface to MongoDB collections as well as creates document instances.
@@ -2903,7 +2952,7 @@ declare module "mongoose" {
     findById(id: any | string | number, projection: any, options: any,
       callback?: (err: any, res: T | null) => void): DocumentQuery<T | null, T> & QueryHelpers;
 
-    model<U extends Document>(name: string): Model<U>;
+    model<U extends Document<TSchD>>(name: string): Model<U>;
 
     /**
      * Creates a Query and specifies a $where condition.
@@ -2973,7 +3022,7 @@ declare module "mongoose" {
      * @param schema discriminator model schema
      * @param value the string stored in the `discriminatorKey` property
      */
-    discriminator<U extends Document>(name: string, schema: Schema, value?: string): Model<U>;
+    discriminator<U extends Document<TSchD>>(name: string, schema: Schema<TSchD>, value?: string): Model<U>;
 
     /**
      * Adds a discriminator type.
@@ -2981,7 +3030,7 @@ declare module "mongoose" {
      * @param schema discriminator model schema
      * @param value the string stored in the `discriminatorKey` property
      */
-    discriminator<U extends Document, M extends Model<U>>(name: string, schema: Schema, value?: string): M;
+    discriminator<U extends Document<TSchD>, M extends Model<U>>(name: string, schema: Schema<TSchD>, value?: string): M;
 
     /** Creates a Query for a distinct operation. Passing a callback immediately executes the query. */
     distinct(field: string, callback?: (err: any, res: any[]) => void): Query<any[]> & QueryHelpers;
@@ -3291,7 +3340,7 @@ declare module "mongoose" {
     where(path: string, val?: any): Query<any> & QueryHelpers;
   }
 
-  interface Document extends MongooseDocument, NodeJS.EventEmitter, ModelProperties {
+  interface Document<TSchD extends SchemaDefinition> extends MongooseDocument<TSchD>, NodeJS.EventEmitter, ModelProperties<TSchD> {
     /** Signal that we desire an increment of this documents version. */
     increment(): this;
 
@@ -3299,7 +3348,7 @@ declare module "mongoose" {
      * Returns another Model instance.
      * @param name model name
      */
-    model<T extends Document>(name: string): Model<T>;
+    model<T extends Document<SchemaDefinition>, TSchD>(name: string): Model<T, TSchD>;
 
     /** Override whether mongoose thinks this doc is deleted or not */
     $isDeleted(isDeleted: boolean): void;
@@ -3345,7 +3394,7 @@ declare module "mongoose" {
     [k: string]: string;
   }
 
-  interface ModelProperties {
+  interface ModelProperties<TSchD extends SchemaDefinition> {
     /** Base Mongoose instance the model uses. */
     base: typeof mongoose;
 
@@ -3368,7 +3417,7 @@ declare module "mongoose" {
     modelName: string;
 
     /** Schema the model uses. */
-    schema: Schema;
+    schema: Schema<TSchD>;
   }
 
   /** https://mongoosejs.com/docs/api.html#query_Query-setOptions */
